@@ -7,8 +7,19 @@ module Rack
   class JSONP
     include Rack::Utils
 
-    VALID_JS_VAR    = /[a-zA-Z_$][\w$]*/
-    VALID_CALLBACK  = /\A#{VALID_JS_VAR}(?:\.?#{VALID_JS_VAR})*\z/
+    VALID_CALLBACK = /\A[a-zA-Z_$](?:\.?[\w$])*\z/
+
+    # These hold the Unicode characters \u2028 and \u2029.
+    #
+    # They are defined in constants for Ruby 1.8 compatibility.
+    #
+    # In 1.8
+    # "\u2028" # => "u2028"
+    # "\u2029" # => "u2029"
+    # In 1.9
+    # "\342\200\250" # => "\u2028"
+    # "\342\200\251" # => "\u2029"
+    U2028, U2029 = ("\u2028" == 'u2028') ? ["\342\200\250", "\342\200\251"] : ["\u2028", "\u2029"]
 
     def initialize(app)
       @app = app
@@ -23,46 +34,48 @@ module Rack
     def call(env)
       request = Rack::Request.new(env)
 
-      if has_callback?(request)
-        callback = request.params['callback']
-        return bad_request unless valid_callback?(callback)
-      end
-
       status, headers, response = @app.call(env)
 
+      if STATUS_WITH_NO_ENTITY_BODY.include?(status)
+        return status, headers, response
+      end
+
       headers = HeaderHash.new(headers)
-      
-      if is_json?(headers) && callback
+
+      if is_json?(headers) && has_callback?(request)
+        callback = request.params['callback']
+        return bad_request unless valid_callback?(callback)
+
         response = pad(callback, response)
 
         # No longer json, its javascript!
         headers['Content-Type'] = headers['Content-Type'].gsub('json', 'javascript')
-        
+
         # Set new Content-Length, if it was set before we mutated the response body
         if headers['Content-Length']
-          length = response.to_ary.inject(0) { |len, part| len + bytesize(part) }
+          length = response.to_ary.inject(0) { |len, part| len + part.bytesize }
           headers['Content-Length'] = length.to_s
         end
       end
 
       [status, headers, response]
     end
-    
+
     private
-    
+
     def is_json?(headers)
       headers.key?('Content-Type') && headers['Content-Type'].include?('application/json')
     end
-    
+
     def has_callback?(request)
-      request.params.include?('callback') and not request.params['callback'].empty?
+      request.params.include?('callback') and not request.params['callback'].to_s.empty?
     end
 
     # See:
     # http://stackoverflow.com/questions/1661197/valid-characters-for-javascript-variable-names
-    # 
+    #
     # NOTE: Supports dots (.) since callbacks are often in objects:
-    # 
+    #
     def valid_callback?(callback)
       callback =~ VALID_CALLBACK
     end
@@ -83,17 +96,17 @@ module Rack
         # replacing them with the escaped version. This should be safe because
         # according to the JSON spec, these characters are *only* valid inside
         # a string and should therefore not be present any other places.
-        body << s.to_s.gsub("\u2028", '\u2028').gsub("\u2029", '\u2029')
+        body << s.to_s.gsub(U2028, '\u2028').gsub(U2029, '\u2029')
       end
-      
+
       # https://github.com/rack/rack-contrib/issues/46
       response.close if response.respond_to?(:close)
 
-      ["#{callback}(#{body})"]
+      ["/**/#{callback}(#{body})"]
     end
 
     def bad_request(body = "Bad Request")
-      [ 400, { 'Content-Type' => 'text/plain', 'Content-Length' => body.size.to_s }, [body] ]
+      [ 400, { 'Content-Type' => 'text/plain', 'Content-Length' => body.bytesize.to_s }, [body] ]
     end
 
   end

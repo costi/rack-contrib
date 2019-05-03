@@ -16,7 +16,7 @@ module Rack
   #
   # Another way to bypass the cache is adding the version number in a field-value pair in the
   # URL query string. As an example, http://yoursite.com/images/test.png?v=1.0.0
-  # In that case, set the option :versioning to false to avoid unneccessary regexp calculations.
+  # In that case, set the option :versioning to false to avoid unnecessary regexp calculations.
   #
   # It's better to keep the current version number in some config file and use it in every static
   # content's URL. So each time we modify our static contents, we just have to change the version
@@ -24,9 +24,15 @@ module Rack
   #
   # You can use Rack::Deflater along with Rack::StaticCache for further improvements in page loading time.
   #
+  # If you'd like to use a non-standard version identifier in your URLs, you
+  # can set the regex to remove with the `:version_regex` option.  If you
+  # want to capture something after the regex (such as file extensions), you
+  # should capture that as `\1`.  All other captured subexpressions will be
+  # discarded.  You may find the `?:` capture modifier helpful.
+  #
   # Examples:
   #     use Rack::StaticCache, :urls => ["/images", "/css", "/js", "/documents*"], :root => "statics"
-  #     will serve all requests beginning with /images, /csss or /js from the
+  #     will serve all requests beginning with /images, /css or /js from the
   #     directory "statics/images",  "statics/css",  "statics/js".
   #     All the files from these directories will have modified headers to enable client/proxy caching,
   #     except the files from the directory "documents". Append a * (star) at the end of the pattern
@@ -34,7 +40,7 @@ module Rack
   #     default headers.
   #
   #     use Rack::StaticCache, :urls => ["/images"], :duration => 2, :versioning => false
-  #     will serve all requests begining with /images under the current directory (default for the option :root
+  #     will serve all requests beginning with /images under the current directory (default for the option :root
   #     is current directory). All the contents served will have cache expiration duration set to 2 years in headers
   #     (default for :duration is 1 year), and StaticCache will not compute any versioning logics (default for
   #     :versioning is true)
@@ -57,8 +63,10 @@ module Rack
       root = options[:root] || Dir.pwd
       @file_server = Rack::File.new(root)
       @cache_duration = options[:duration] || 1
-      @versioning_enabled = true
-      @versioning_enabled = options[:versioning] unless options[:versioning].nil?
+      @versioning_enabled = options.fetch(:versioning, true)
+      if @versioning_enabled
+        @version_regex = options.fetch(:version_regex, /-[\d.]+([.][a-zA-Z][\w]+)?$/)
+      end
       @duration_in_seconds = self.duration_in_seconds
       @duration_in_words    = self.duration_in_words
     end
@@ -66,19 +74,18 @@ module Rack
     def call(env)
       path = env["PATH_INFO"]
       url = @urls.detect{ |u| path.index(u) == 0 }
-      unless url.nil?
-        path.sub!(/-[\d.]+([.][a-zA-Z][\w]+)?$/, '\1') if @versioning_enabled
+      if url.nil?
+        @app.call(env)
+      else
+        if @versioning_enabled
+          path.sub!(@version_regex, '\1')
+        end
         status, headers, body = @file_server.call(env)
         if @no_cache[url].nil?
           headers['Cache-Control'] ="max-age=#{@duration_in_seconds}, public"
           headers['Expires'] = @duration_in_words
-          headers.delete 'Etag'
-          headers.delete 'Pragma'
-          headers.delete 'Last-Modified'
         end
         [status, headers, body]
-      else
-        @app.call(env)
       end
     end
 
@@ -87,7 +94,7 @@ module Rack
     end
 
     def duration_in_seconds
-      60 * 60 * 24 * 365 * @cache_duration
+      (60 * 60 * 24 * 365 * @cache_duration).to_i
     end
   end
 end

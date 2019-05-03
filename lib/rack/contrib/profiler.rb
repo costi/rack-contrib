@@ -4,7 +4,16 @@ module Rack
   # Set the profile=process_time query parameter to download a
   # calltree profile of the request.
   #
-  # Pass the :printer option to pick a different result format.
+  # Pass the :printer option to pick a different result format.  Note that
+  # some printers (such as CallTreePrinter) have broken the
+  # `AbstractPrinter` API, and thus will not work.  Bug reports to
+  # `ruby-prof`, please, not us.
+  #
+  # You can cause every request to be run multiple times by passing the
+  # `:times` option to the `use Rack::Profiler` call.  You can also run a
+  # given request multiple times, by setting the `profiler_runs` query
+  # parameter in the request URL.
+  #
   class Profiler
     MODES = %w(process_time wall_time cpu_time
                allocations memory gc_runs gc_time)
@@ -53,8 +62,10 @@ module Rack
         ::RubyProf.measure_mode = ::RubyProf.const_get(mode.upcase)
 
         GC.enable_stats if GC.respond_to?(:enable_stats)
+        request = Rack::Request.new(env.clone)
+        runs = (request.params['profiler_runs'] || @times).to_i
         result = ::RubyProf.profile do
-          @times.times { @app.call(env) }
+          runs.times { @app.call(env) }
         end
         GC.disable_stats if GC.respond_to?(:disable_stats)
 

@@ -17,9 +17,9 @@ module Rack
 
     def initialize(app, options)
       @app = app
-      @try = ['', *options.delete(:try)]
+      @try = ['', *options[:try]]
       @static = ::Rack::Static.new(
-        lambda { [404, {}, []] },
+        lambda { |_| [404, {}, []] },
         options)
     end
 
@@ -28,7 +28,7 @@ module Rack
       found = nil
       @try.each do |path|
         resp = @static.call(env.merge!({'PATH_INFO' => orig_path + path}))
-        break if 404 != resp[0] && found = resp
+        break if !(403..405).include?(resp[0]) && found = resp
       end
       found or @app.call(env.merge!('PATH_INFO' => orig_path))
     end
